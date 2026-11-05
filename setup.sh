@@ -583,9 +583,9 @@ configure_tunnel() {
   run install -d -o root -g "$APP_USER" -m 750 "$TUNNEL_CONF_DIR"
   run install -o "$APP_USER" -g "$APP_USER" -m 600 "${CLOUDFLARED_SRC}/${id}.json" "${TUNNEL_CONF_DIR}/${id}.json"
   run write_tunnel_config "$id"
-  # Creates the DNS record; it may already exist, which is fine.
-  if ! run cloudflared --origincert "${CLOUDFLARED_SRC}/cert.pem" tunnel route dns --overwrite-dns "$id" "$TUNNEL_HOST"; then
-    warn "could not create the DNS record for ${TUNNEL_HOST}. Create a CNAME to ${id}.cfargotunnel.com yourself."
+  # Never overwrites an existing record: it could belong to another service.
+  if ! run cloudflared --origincert "${CLOUDFLARED_SRC}/cert.pem" tunnel route dns "$id" "$TUNNEL_HOST"; then
+    warn "DNS record for ${TUNNEL_HOST} not created (it probably exists). Make sure it is a CNAME to ${id}.cfargotunnel.com."
   fi
   ok "Named tunnel ${TUNNEL_NAME} (${id}) routes ${TUNNEL_HOST} to Transit"
 
@@ -672,6 +672,8 @@ cmd_tunnel() {
 
   step 3 "$total" "Restarting"
   start_service
+  # Apply the new tunnel unit if the tunnel is currently open.
+  run systemctl try-restart "$TUNNEL_SERVICE"
   (( DRY_RUN )) || print_summary
 }
 
