@@ -93,7 +93,11 @@ async function main(): Promise<void> {
     next.totpSecret = null;
   }
 
-  const hostname = (await ask('Public hostname if you use a named tunnel (empty to skip): ')).toLowerCase();
+  const hostname = (
+    process.env.TRANSIT_HOSTNAME ?? (await ask('Public hostname if you use a named tunnel (empty to skip): '))
+  )
+    .trim()
+    .toLowerCase();
   next.allowedHosts = hostname ? [hostname, 'localhost', '127.0.0.1'] : [];
 
   next.host ??= DEFAULTS.host;

@@ -112,11 +112,22 @@ sudo ./setup.sh uninstall [--purge]
 | --- | --- |
 | `install` | Checks the system (architecture, disk, memory, clock), installs Node 22 from nodejs.org with a verified checksum, creates the `transit` user, copies the project to `/opt/transit`, builds or reuses `dist/`, runs the interactive configuration, installs and starts the hardened systemd units, optionally installs `cloudflared` from Cloudflare's signed apt repository. |
 | `update` | Saves the current version, deploys the new code, rebuilds, restarts and checks health. On any failure it restores the saved version automatically. |
+| `tunnel` | Connects an existing named Cloudflare tunnel (see below) and restricts Transit to its hostname. |
 | `status` | Version, service and tunnel state, health, data size, TOTP and clock state, tunnel URL if open. |
 | `doctor` | Verifies loopback-only listening, file permissions, TOTP, `allowedHosts`, Node version, clock and the systemd exposure score. Exits non-zero on failure. |
 | `uninstall` | Removes the services. `--purge` also deletes code, configuration, stored files and the user (asks for confirmation). |
 
 Options: `--dry-run` prints every change without making it, `--verbose` shows command output, `--yes` answers confirmation questions, `--rebuild` forces a compile, `--no-cloudflared`, `--no-color`. Every run is logged to `/var/log/transit-setup.log`.
+
+### Using a named tunnel you created as root
+
+If you ran `cloudflared tunnel login` and `cloudflared tunnel create` as root, the credentials are in `/root/.cloudflared`, which the `transit` service user cannot read. Let the installer wire it up:
+
+```bash
+sudo ./setup.sh tunnel --tunnel NAME --hostname files.example.com
+```
+
+It copies the tunnel credentials to `/etc/transit` (readable by the service user only), writes the ingress config, creates the DNS record, sets `allowedHosts` and switches `transit-tunnel` to the named tunnel. Use `--cloudflared-dir` if the credentials are elsewhere. Then `sudo systemctl start transit-tunnel` opens it and `stop` closes it.
 
 ### Manual install
 

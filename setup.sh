@@ -19,6 +19,8 @@ readonly APP_DIR="/opt/transit"
 readonly APP_USER="transit"
 readonly SERVICE="transit"
 readonly TUNNEL_SERVICE="transit-tunnel"
+readonly TUNNEL_CONF_DIR="/etc/transit"
+readonly TUNNEL_CONF="${TUNNEL_CONF_DIR}/cloudflared.yml"
 readonly NODE_MAJOR=22
 readonly MIN_FREE_MB=1024
 readonly STATE_DIR="/var/lib/transit-setup"
@@ -27,6 +29,9 @@ readonly LOCK_FILE="/var/lock/transit-setup.lock"
 COMMAND="install"
 DATA_DIR=""
 INSTALL_CLOUDFLARED="ask"
+TUNNEL_NAME=""
+TUNNEL_HOST=""
+CLOUDFLARED_SRC="/root/.cloudflared"
 REBUILD=0
 PURGE=0
 ASSUME_YES=0
@@ -131,12 +136,16 @@ Usage: sudo ./${SCRIPT_NAME} [command] [options]
 Commands:
   install      Install or reconfigure Transit (default)
   update       Deploy new code and keep configuration and stored files; rolls back on failure
+  tunnel       Connect an existing named Cloudflare tunnel (needs --tunnel and --hostname)
   status       Show service, tunnel and health information
   doctor       Run security and health checks (changes nothing)
   uninstall    Remove the services; add --purge to also delete the user, code, config and files
 
 Options:
   --data-dir PATH     Store files in PATH (for example a USB drive) instead of ${APP_DIR}/data
+  --tunnel NAME       Name (or UUID) of an existing named tunnel to use instead of a quick tunnel
+  --hostname HOST     Public hostname routed to that tunnel, for example files.example.com
+  --cloudflared-dir D Directory holding cert.pem and the tunnel credentials (default ${CLOUDFLARED_SRC})
   --no-cloudflared    Do not offer to install cloudflared
   --rebuild           Compile from src/ even when a prebuilt dist/ is present
   --purge             With uninstall: also delete code, configuration and stored files
@@ -150,6 +159,7 @@ Options:
 Examples:
   sudo ./${SCRIPT_NAME}
   sudo ./${SCRIPT_NAME} install --data-dir /mnt/usb/transit
+  sudo ./${SCRIPT_NAME} tunnel --tunnel transit --hostname files.example.com
   sudo ./${SCRIPT_NAME} update
   sudo ./${SCRIPT_NAME} doctor
 EOF
@@ -159,12 +169,21 @@ parse_args() {
   local positional_seen=0
   while (( $# > 0 )); do
     case "$1" in
-      install|update|status|doctor|uninstall)
+      install|update|tunnel|status|doctor|uninstall)
         (( positional_seen )) && die "only one command may be given"
         COMMAND="$1"; positional_seen=1; shift ;;
       --data-dir)
         (( $# >= 2 )) || die "--data-dir needs a path"
         DATA_DIR="$2"; shift 2 ;;
+      --tunnel)
+        (( $# >= 2 )) || die "--tunnel needs a tunnel name"
+        TUNNEL_NAME="$2"; shift 2 ;;
+      --hostname)
+        (( $# >= 2 )) || die "--hostname needs a host name"
+        TUNNEL_HOST="${2,,}"; shift 2 ;;
+      --cloudflared-dir)
+        (( $# >= 2 )) || die "--cloudflared-dir needs a path"
+        CLOUDFLARED_SRC="$2"; shift 2 ;;
       --no-cloudflared) INSTALL_CLOUDFLARED="no"; shift ;;
       --rebuild)        REBUILD=1; shift ;;
       --purge)          PURGE=1; shift ;;
@@ -184,6 +203,15 @@ parse_args() {
     [[ "$DATA_DIR" != *[[:space:]]* ]] || die "--data-dir must not contain spaces"
   fi
   if (( PURGE )) && [[ "$COMMAND" != "uninstall" ]]; then die "--purge only applies to the uninstall command"; fi
+
+  if [[ -n "$TUNNEL_NAME" || -n "$TUNNEL_HOST" || "$COMMAND" == "tunnel" ]]; then
+    [[ -n "$TUNNEL_NAME" && -n "$TUNNEL_HOST" ]] || die "--tunnel and --hostname must be given together"
+    [[ "$TUNNEL_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid tunnel name: ${TUNNEL_NAME}"
+    [[ "$TUNNEL_HOST" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "invalid host name: ${TUNNEL_HOST}"
+    [[ "$CLOUDFLARED_SRC" == /* && "$CLOUDFLARED_SRC" != *[[:space:]]* ]] || die "--cloudflared-dir must be an absolute path without spaces"
+    # A named tunnel needs cloudflared, so do not ask about it.
+    INSTALL_CLOUDFLARED="yes"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -431,7 +459,14 @@ configure_app() {
 install_units() {
   sed "s#^ExecStart=.*#ExecStart=${NODE_BIN} dist/src/main.js#" "${SCRIPT_DIR}/deploy/transit.service" \
     >"/etc/systemd/system/${SERVICE}.service"
-  install -m 644 "${SCRIPT_DIR}/deploy/transit-tunnel.service" "/etc/systemd/system/${TUNNEL_SERVICE}.service"
+  if [[ -f "$TUNNEL_CONF" ]]; then
+    # Named tunnel: credentials live in /etc/transit, readable by the service user only.
+    sed -e "s#^ExecStart=.*#ExecStart=$(command -v cloudflared) --no-autoupdate --config ${TUNNEL_CONF} tunnel run#" \
+      -e 's#^Description=.*#Description=Cloudflare named tunnel for Transit (start on demand)#' \
+      "${SCRIPT_DIR}/deploy/transit-tunnel.service" >"/etc/systemd/system/${TUNNEL_SERVICE}.service"
+  else
+    install -m 644 "${SCRIPT_DIR}/deploy/transit-tunnel.service" "/etc/systemd/system/${TUNNEL_SERVICE}.service"
+  fi
 
   local data_dir="${DATA_DIR:-}"
   if [[ -z "$data_dir" ]]; then
@@ -504,16 +539,83 @@ ensure_cloudflared() {
   ok "Installed cloudflared"
 }
 
+uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
+# Prints the UUID of the named tunnel (accepts a UUID or a tunnel name).
+resolve_tunnel_id() {
+  local name="$1" id
+  if [[ "$name" =~ $uuid_re ]]; then echo "$name"; return 0; fi
+  [[ -f "${CLOUDFLARED_SRC}/cert.pem" ]] || die "${CLOUDFLARED_SRC}/cert.pem not found. Run 'cloudflared tunnel login' as root first."
+  id="$(cloudflared --origincert "${CLOUDFLARED_SRC}/cert.pem" tunnel list --name "$name" --output json 2>>"$LOG_FILE" \
+    | "${NODE_BIN:-node}" -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const l=JSON.parse(d);console.log(l.length?l[0].id:"")}catch{console.log("")}})')" || true
+  [[ "$id" =~ $uuid_re ]] || die "tunnel '${name}' not found for this Cloudflare account"
+  echo "$id"
+}
+
+write_tunnel_config() {
+  local id="$1"
+  umask 077
+  cat >"$TUNNEL_CONF" <<EOF
+tunnel: ${id}
+credentials-file: ${TUNNEL_CONF_DIR}/${id}.json
+ingress:
+  - hostname: ${TUNNEL_HOST}
+    service: http://127.0.0.1:$(cfg_get port 8787)
+  - service: http_status:404
+EOF
+  chown "root:${APP_USER}" "$TUNNEL_CONF"
+  chmod 640 "$TUNNEL_CONF"
+}
+
+# Copies the credentials of an existing named tunnel to a place the service user can read,
+# writes its ingress config and restricts Transit to the public host name.
+configure_tunnel() {
+  [[ -n "$TUNNEL_NAME" ]] || return 0
+  local id
+  if (( DRY_RUN )); then
+    id="00000000-0000-0000-0000-000000000000"
+  else
+    command -v cloudflared >/dev/null 2>&1 || die "cloudflared is not installed"
+    id="$(resolve_tunnel_id "$TUNNEL_NAME")"
+    [[ -f "${CLOUDFLARED_SRC}/${id}.json" ]] || die "credentials ${CLOUDFLARED_SRC}/${id}.json not found"
+  fi
+
+  run install -d -o root -g "$APP_USER" -m 750 "$TUNNEL_CONF_DIR"
+  run install -o "$APP_USER" -g "$APP_USER" -m 600 "${CLOUDFLARED_SRC}/${id}.json" "${TUNNEL_CONF_DIR}/${id}.json"
+  run write_tunnel_config "$id"
+  # Creates the DNS record; it may already exist, which is fine.
+  if ! run cloudflared --origincert "${CLOUDFLARED_SRC}/cert.pem" tunnel route dns --overwrite-dns "$id" "$TUNNEL_HOST"; then
+    warn "could not create the DNS record for ${TUNNEL_HOST}. Create a CNAME to ${id}.cfargotunnel.com yourself."
+  fi
+  ok "Named tunnel ${TUNNEL_NAME} (${id}) routes ${TUNNEL_HOST} to Transit"
+
+  if [[ -f "${APP_DIR}/config.json" ]]; then
+    run_as_app "${NODE_BIN:-node}" -e '
+      const fs = require("fs");
+      const cfg = JSON.parse(fs.readFileSync("config.json", "utf8"));
+      cfg.allowedHosts = [process.argv[1], "localhost", "127.0.0.1"];
+      fs.writeFileSync("config.json", JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+    ' "$TUNNEL_HOST"
+    ok "allowedHosts now accepts ${TUNNEL_HOST}"
+  fi
+}
+
 print_summary() {
-  local data_dir
+  local data_dir tunnel_hint
   data_dir="$(effective_data_dir)"
+  if [[ -f "$TUNNEL_CONF" ]]; then
+    tunnel_hint="  (your named tunnel: https://$(grep -m1 'hostname:' "$TUNNEL_CONF" | awk '{print $3}'))"
+  else
+    tunnel_hint="  (quick tunnel: the https://....trycloudflare.com address is in the journal)"
+  fi
   cat <<EOF
 
 ${C_BOLD}Done.${C_RESET} Transit listens on 127.0.0.1 only. Open the tunnel only while you need it:
 
   sudo systemctl start ${TUNNEL_SERVICE}
-  journalctl -u ${TUNNEL_SERVICE} -n 20      # shows the https://....trycloudflare.com address
+  journalctl -u ${TUNNEL_SERVICE} -n 20
   sudo systemctl stop ${TUNNEL_SERVICE}
+${tunnel_hint}
 
 Maintenance:
 
@@ -550,9 +652,26 @@ cmd_install() {
   step 5 "$total" "Configuration"
   configure_app
 
-  step 6 "$total" "Service"
-  start_service
+  step 6 "$total" "Service and tunnel"
   ensure_cloudflared
+  configure_tunnel
+  start_service
+  (( DRY_RUN )) || print_summary
+}
+
+cmd_tunnel() {
+  local total=3
+  step 1 "$total" "Checking the system"
+  preflight
+  installed || die "Transit is not installed. Run: sudo ./${SCRIPT_NAME} install"
+  NODE_BIN="$(command -v node)"
+
+  step 2 "$total" "Connecting the named tunnel"
+  ensure_cloudflared
+  configure_tunnel
+
+  step 3 "$total" "Restarting"
+  start_service
   (( DRY_RUN )) || print_summary
 }
 
@@ -597,7 +716,12 @@ cmd_status() {
   printf '  data dir     : %s (%s)\n' "$(effective_data_dir)" "$(du -sh "$(effective_data_dir)" 2>/dev/null | cut -f1 || echo '?')"
   printf '  totp         : %s\n' "$([[ "$(cfg_get totpSecret null)" != "null" ]] && echo enabled || echo disabled)"
   printf '  clock synced : %s\n' "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || echo unknown)"
-  if systemctl is-active --quiet "$TUNNEL_SERVICE" 2>/dev/null; then
+  if [[ -f "$TUNNEL_CONF" ]]; then
+    printf '  tunnel mode  : named (%s)\n' "$(grep -m1 'hostname:' "$TUNNEL_CONF" | awk '{print $3}')"
+  else
+    printf '  tunnel mode  : quick\n'
+  fi
+  if [[ ! -f "$TUNNEL_CONF" ]] && systemctl is-active --quiet "$TUNNEL_SERVICE" 2>/dev/null; then
     printf '  tunnel URL   : %s\n' "$(journalctl -u "$TUNNEL_SERVICE" -n 100 --no-pager 2>/dev/null | grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -n 1 || true)"
   fi
 }
@@ -697,7 +821,7 @@ cmd_uninstall() {
   ok "Services removed"
 
   if (( PURGE )); then
-    run rm -rf "$APP_DIR" "$data_dir" "$STATE_DIR"
+    run rm -rf "$APP_DIR" "$data_dir" "$STATE_DIR" "$TUNNEL_CONF_DIR"
     if id "$APP_USER" >/dev/null 2>&1; then run userdel "$APP_USER"; fi
     ok "Code, configuration, stored files and user deleted"
   else
@@ -715,6 +839,7 @@ main() {
   case "$COMMAND" in
     install)   cmd_install ;;
     update)    cmd_update ;;
+    tunnel)    cmd_tunnel ;;
     status)    cmd_status ;;
     doctor)    cmd_doctor ;;
     uninstall) cmd_uninstall ;;
