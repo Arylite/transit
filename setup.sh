@@ -433,10 +433,11 @@ configure_app() {
     if [[ -f "${APP_DIR}/config.json" ]]; then
       run_as_app "$NODE_BIN" -e '
         const fs = require("fs");
-        const cfg = JSON.parse(fs.readFileSync("config.json", "utf8"));
+        const file = process.argv[2];
+        const cfg = JSON.parse(fs.readFileSync(file, "utf8"));
         cfg.dataDir = process.argv[1];
-        fs.writeFileSync("config.json", JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
-      ' "$DATA_DIR"
+        fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+      ' "$DATA_DIR" "${APP_DIR}/config.json"
     else
       run runuser -u "$APP_USER" -- bash -c "umask 077; printf '{\n  \"dataDir\": \"%s\"\n}\n' \"\$1\" > '${APP_DIR}/config.json'" _ "$DATA_DIR"
     fi
@@ -592,10 +593,11 @@ configure_tunnel() {
   if [[ -f "${APP_DIR}/config.json" ]]; then
     run_as_app "${NODE_BIN:-node}" -e '
       const fs = require("fs");
-      const cfg = JSON.parse(fs.readFileSync("config.json", "utf8"));
+      const file = process.argv[2];
+      const cfg = JSON.parse(fs.readFileSync(file, "utf8"));
       cfg.allowedHosts = [process.argv[1], "localhost", "127.0.0.1"];
-      fs.writeFileSync("config.json", JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
-    ' "$TUNNEL_HOST"
+      fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
+    ' "$TUNNEL_HOST" "${APP_DIR}/config.json"
     ok "allowedHosts now accepts ${TUNNEL_HOST}"
   fi
 }
