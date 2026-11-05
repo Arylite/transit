@@ -1,0 +1,30 @@
+[Unit]
+Description=Cloudflare quick tunnel for Transit (start on demand, no account needed)
+After=network-online.target transit.service
+Wants=network-online.target
+Requires=transit.service
+
+[Service]
+User=transit
+Group=transit
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8787
+Restart=on-failure
+RestartSec=5
+
+MemoryMax=256M
+TasksMax=64
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# Intentionally not enabled at boot: start it only while you need to transfer files.
+# The public URL is printed in the journal: journalctl -u transit-tunnel -n 20

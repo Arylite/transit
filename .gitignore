@@ -1,0 +1,4 @@
+config.json
+data/
+dist/
+node_modules/

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Transit</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <section id="login-view" class="narrow" hidden>
+      <h1>Transit</h1>
+      <form id="login-form" class="card">
+        <label>
+          <span>Password</span>
+          <input id="password" type="password" autocomplete="current-password" required>
+        </label>
+        <label id="code-field" hidden>
+          <span>Authenticator code</span>
+          <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
+        </label>
+        <p id="login-error" class="error" role="alert" hidden></p>
+        <button type="submit" class="primary">Sign in</button>
+      </form>
+    </section>
+
+    <section id="vault-view" hidden>
+      <header>
+        <h1>Transit</h1>
+        <div class="header-right">
+          <span id="usage" class="muted"></span>
+          <button id="panic" type="button" class="danger">Delete all</button>
+          <button id="logout" type="button">Sign out</button>
+        </div>
+      </header>
+
+      <p id="notice" class="error" role="alert" hidden></p>
+
+      <form id="unlock-form" class="card">
+        <label>
+          <span>Encryption passphrase <span class="muted">(never leaves this browser, use the same on both machines)</span></span>
+          <input id="passphrase" type="password" autocomplete="off" spellcheck="false">
+        </label>
+        <div class="row">
+          <button id="unlock" type="submit" class="primary">Unlock</button>
+          <button id="lock" type="button" hidden>Lock</button>
+          <span id="key-status" class="muted">Locked</span>
+        </div>
+      </form>
+
+      <label id="drop" class="drop locked">
+        <input id="file-input" type="file" multiple>
+        <strong>Drop files here</strong>
+        <span class="muted">or click to choose</span>
+      </label>
+
+      <div class="options">
+        <label>
+          <span>Keep for</span>
+          <select id="ttl"></select>
+        </label>
+        <label class="check">
+          <input id="burn" type="checkbox">
+          <span>Delete after first download</span>
+        </label>
+      </div>
+
+      <ul id="transfers" class="transfers"></ul>
+
+      <h2>Files</h2>
+      <p id="empty" class="muted">Nothing here. Everything you upload is deleted automatically.</p>
+      <table id="files-table" hidden>
+        <thead>
+          <tr><th>Name</th><th class="num">Size</th><th class="num">Expires in</th><th></th></tr>
+        </thead>
+        <tbody id="files-body"></tbody>
+      </table>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

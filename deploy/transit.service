@@ -1,0 +1,49 @@
+[Unit]
+Description=Transit private file drop
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+
+[Service]
+User=transit
+Group=transit
+WorkingDirectory=/opt/transit
+ExecStart=/usr/bin/node dist/src/main.js
+Restart=on-failure
+RestartSec=5
+
+# Resource limits (sized for a Raspberry Pi 3B+; Transit streams, it never buffers whole files).
+MemoryMax=512M
+TasksMax=128
+
+# Sandbox: the service may only write to its own data directory.
+# If "dataDir" in config.json points elsewhere (for example a USB drive), setup.sh adds it
+# to ReadWritePaths through a drop-in file.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RemoveIPC=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ReadWritePaths=/opt/transit/data
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

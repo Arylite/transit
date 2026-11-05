@@ -1,0 +1,35 @@
+{
+  "name": "transit",
+  "version": "1.0.0",
+  "description": "Private self-hosted file transfer with client-side encryption and automatic expiry, built to sit behind a Cloudflare Tunnel",
+  "keywords": [
+    "file-transfer",
+    "end-to-end-encryption",
+    "hono",
+    "cloudflare-tunnel",
+    "self-hosted",
+    "raspberry-pi"
+  ],
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.web.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "setup": "node dist/src/setup.js",
+    "start": "node dist/src/main.js",
+    "test": "npm run build && node --test \"dist/test/*.test.js\""
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.6",
+    "hono": "4.13.16",
+    "jose": "6.2.15"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
